@@ -1,13 +1,13 @@
-# TweetFlow
+# Sosmed Online
 
-Twitter auto-post scheduler for Citra (Marketing).
+Social media management platform.
 
 ## Features
 
-- Schedule tweets for auto-posting
-- Queue management
-- Twitter API v2 integration
-- Auth via Supabase
+- Twitter/X OAuth 2.0 integration
+- Schedule posts for auto-posting
+- Queue management (pending/posted/failed)
+- Multi-platform support (coming soon)
 
 ## Setup
 
@@ -21,18 +21,19 @@ npm install
    - Run `supabase/schema.sql` in SQL Editor
    - Copy credentials
 
-3. Setup Twitter API:
+3. Setup Twitter/X OAuth:
    - Create app at developer.twitter.com
-   - Get API Key, API Secret, Access Token, Access Secret
+   - Enable OAuth 2.0
+   - Add callback URL: `https://your-domain.com/api/auth/x/callback`
+   - Get Client ID and Client Secret
 
 4. Create `.env.local`:
 ```
+NEXT_PUBLIC_APP_URL=https://your-domain.com
 NEXT_PUBLIC_SUPABASE_URL=your-url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-key
-TWITTER_API_KEY=your-key
-TWITTER_API_SECRET=your-secret
-TWITTER_ACCESS_TOKEN=your-token
-TWITTER_ACCESS_SECRET=your-secret
+X_CLIENT_ID=your-client-id
+X_CLIENT_SECRET=your-client-secret
 ```
 
 5. Run:
@@ -42,7 +43,7 @@ npm run dev
 
 ## Stack
 
-- Next.js 15 + TypeScript
-- Supabase (Auth + Database)
-- Twitter API v2
+- Next.js 16 + TypeScript
+- Supabase (Database)
+- Twitter/X OAuth 2.0 (PKCE)
 - Tailwind CSS

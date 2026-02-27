@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "TweetFlow - Twitter Scheduler",
-  description: "Schedule tweets for auto-posting",
+  title: "Sosmed Online",
+  description: "Social media management platform",
 };
 
 export default function RootLayout({
