@@ -1,20 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { TwitterApi } from 'twitter-api-v2'
 import { createClient } from '@/lib/supabase/server'
 
 export async function POST(request: NextRequest) {
   try {
     const { tweetId, content } = await request.json()
     
-    const twitterClient = new TwitterApi({
-      appKey: process.env.TWITTER_API_KEY!,
-      appSecret: process.env.TWITTER_API_SECRET!,
-      accessToken: process.env.TWITTER_ACCESS_TOKEN!,
-      accessSecret: process.env.TWITTER_ACCESS_SECRET!,
+    // Post tweet using X API v2
+    const response = await fetch('https://api.x.com/2/tweets', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.X_BEARER_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        text: content
+      })
     })
 
-    const tweet = await twitterClient.v2.tweet(content)
-    
+    const tweet = await response.json()
+
+    if (!response.ok) {
+      throw new Error(tweet.errors?.[0]?.detail || 'Failed to post tweet')
+    }
+
     // Update tweet status
     const supabase = await createClient()
     await supabase
