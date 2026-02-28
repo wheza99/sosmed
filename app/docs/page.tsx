@@ -53,7 +53,7 @@ export default function DocsPage() {
         <CardContent className="space-y-4">
           <div>
             <label className="text-sm font-medium mb-2 block">Server URL</label>
-            <CodeBlock code="http://localhost:4000/sse" id="server-url" />
+            <CodeBlock code="https://mcp.sosmed.online/sse" id="server-url" />
           </div>
           <div className="p-4 bg-muted/50 rounded-lg border">
             <div className="flex items-center gap-2 mb-2">
@@ -82,22 +82,22 @@ export default function DocsPage() {
             </TabsList>
 
             <TabsContent value="mcporter" className="space-y-4 mt-4">
-              <CodeBlock code={`mcporter config add sosmed --url http://localhost:4000/sse --transport sse --header "x-api-key=smd_YOUR_KEY"`} id="mcporter-config" language="bash" />
+              <CodeBlock code={`mcporter config add sosmed --url https://mcp.sosmed.online/sse --transport sse --header "x-api-key=smd_YOUR_KEY"`} id="mcporter-config" language="bash" />
               <p className="text-sm text-muted-foreground">Test:</p>
               <CodeBlock code={`mcporter list\nmcporter call sosmed.get_workspace`} id="mcporter-test" language="bash" />
             </TabsContent>
 
             <TabsContent value="claude" className="space-y-4 mt-4">
               <p className="text-xs text-muted-foreground">~/Library/Application Support/Claude/claude_desktop_config.json</p>
-              <CodeBlock code={`{\n  "mcp_servers": [{\n    "type": "url",\n    "url": "http://localhost:4000/sse",\n    "name": "sosmed",\n    "authorization_token": "smd_YOUR_KEY"\n  }]\n}`} id="claude-config" />
+              <CodeBlock code={`{\n  "mcp_servers": [{\n    "type": "url",\n    "url": "https://mcp.sosmed.online/sse",\n    "name": "sosmed",\n    "authorization_token": "smd_YOUR_KEY"\n  }]\n}`} id="claude-config" />
             </TabsContent>
 
             <TabsContent value="windsurf" className="space-y-4 mt-4">
-              <CodeBlock code={`{\n  "mcpServers": {\n    "sosmed": {\n      "url": "http://localhost:4000/sse",\n      "headers": { "x-api-key": "smd_YOUR_KEY" }\n    }\n  }\n}`} id="windsurf-config" />
+              <CodeBlock code={`{\n  "mcpServers": {\n    "sosmed": {\n      "url": "https://mcp.sosmed.online/sse",\n      "headers": { "x-api-key": "smd_YOUR_KEY" }\n    }\n  }\n}`} id="windsurf-config" />
             </TabsContent>
 
             <TabsContent value="cursor" className="space-y-4 mt-4">
-              <CodeBlock code={`{\n  "mcpServers": {\n    "sosmed": {\n      "url": "http://localhost:4000/sse",\n      "headers": { "x-api-key": "smd_YOUR_KEY" }\n    }\n  }\n}`} id="cursor-config" />
+              <CodeBlock code={`{\n  "mcpServers": {\n    "sosmed": {\n      "url": "https://mcp.sosmed.online/sse",\n      "headers": { "x-api-key": "smd_YOUR_KEY" }\n    }\n  }\n}`} id="cursor-config" />
             </TabsContent>
           </Tabs>
         </CardContent>
