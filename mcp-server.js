@@ -62,6 +62,78 @@ async function validateApiKey(apiKey) {
   return { userId: keyData.user_id, orgId: keyData.org_id };
 }
 
+/**
+ * Refresh X OAuth2 access token using refresh_token
+ * Auto-updates DB with new tokens
+ */
+async function refreshXToken(account) {
+  if (!account.refresh_token) {
+    throw new Error('No refresh token available. Please reconnect your account.');
+  }
+
+  console.log('[Token Refresh] Refreshing token for account ' + account.id + '...');
+
+  const response = await fetch('https://api.x.com/2/oauth2/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': 'Basic ' + Buffer.from(process.env.X_CLIENT_ID + ':' + process.env.X_CLIENT_SECRET).toString('base64'),
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: account.refresh_token,
+    }).toString(),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error('[Token Refresh] Failed:', data);
+    throw new Error('Failed to refresh token. Please reconnect your account.');
+  }
+
+  // Calculate new expiration
+  const newExpiresAt = new Date(Date.now() + (data.expires_in || 7200) * 1000);
+
+  // Update DB with new tokens
+  const { error: updateError } = await adminClient
+    .from('social_accounts')
+    .update({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      token_expires_at: newExpiresAt.toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', account.id);
+
+  if (updateError) {
+    console.error('[Token Refresh] DB update failed:', updateError);
+    throw new Error('Failed to save refreshed token');
+  }
+
+  console.log('[Token Refresh] Success! Token valid until ' + newExpiresAt.toISOString());
+
+  return data.access_token;
+}
+
+/**
+ * Get valid access token, refreshing if needed
+ */
+async function getValidToken(account) {
+  // Check if token is expired or will expire in next 5 minutes
+  const now = new Date();
+  const expiresAt = account.token_expires_at ? new Date(account.token_expires_at) : null;
+  const bufferMs = 5 * 60 * 1000; // 5 minutes buffer
+
+  if (!expiresAt || (expiresAt.getTime() - now.getTime()) < bufferMs) {
+    console.log('[Token Check] Token expired or expiring soon, refreshing...');
+    return await refreshXToken(account);
+  }
+
+  console.log('[Token Check] Token still valid until ' + expiresAt.toISOString());
+  return account.access_token;
+}
+
 const TOOLS = [
   {
     name: 'get_workspace',
@@ -137,7 +209,7 @@ function formatPost(post) {
   return {
     id: post.id,
     content: post.content?.substring(0, 100) + (post.content?.length > 100 ? '...' : ''),
-    status: `${statusEmoji[post.status] || '❓'} ${post.status}`,
+    status: (statusEmoji[post.status] || '❓') + ' ' + post.status,
     platform: account?.platform || 'unknown',
     username: account?.username || 'unknown',
     created_at: post.created_at,
@@ -197,14 +269,17 @@ function createMCPServer(authContext) {
 
         case 'get_post': {
           const { post_id } = args;
-          const { data: post, error } = await adminClient.from('posts').select('id, content, status, posted_at, created_at, platform_post_id, error_message, account:social_accounts(id, platform, username, display_name, access_token)').eq('id', post_id).eq('org_id', orgId).single();
+          const { data: post, error } = await adminClient.from('posts').select('id, content, status, posted_at, created_at, platform_post_id, error_message, account:social_accounts(id, platform, username, display_name, access_token, refresh_token, token_expires_at)').eq('id', post_id).eq('org_id', orgId).single();
           if (error) throw error;
 
           let platformData = null;
           const account = Array.isArray(post.account) ? post.account[0] : post.account;
-          if (post.platform_post_id && account?.platform === 'x' && account?.access_token) {
+          if (post.platform_post_id && account?.platform === 'x') {
             try {
-              const response = await fetch(`https://api.x.com/2/tweets?ids=${post.platform_post_id}&tweet.fields=created_at,public_metrics,text`, { headers: { 'Authorization': `Bearer ${account.access_token}` } });
+              // Get valid token (refresh if needed)
+              const accessToken = await getValidToken(account);
+              
+              const response = await fetch('https://api.x.com/2/tweets?ids=' + post.platform_post_id + '&tweet.fields=created_at,public_metrics,text', { headers: { 'Authorization': 'Bearer ' + accessToken } });
               if (response.ok) {
                 const data = await response.json();
                 platformData = data.data?.[0] || null;
@@ -218,7 +293,7 @@ function createMCPServer(authContext) {
           const { account_id, content } = args;
           if (!content || content.trim().length === 0) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Content is required' }) }] };
 
-          const { data: account, error: accountError } = await adminClient.from('social_accounts').select('id, platform, access_token').eq('id', account_id).eq('org_id', orgId).single();
+          const { data: account, error: accountError } = await adminClient.from('social_accounts').select('id, platform, access_token, refresh_token, token_expires_at').eq('id', account_id).eq('org_id', orgId).single();
           if (accountError || !account) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Account not found' }) }] };
 
           let status = 'draft';
@@ -228,12 +303,14 @@ function createMCPServer(authContext) {
 
           if (account.platform === 'x') {
             if (content.length > 280) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Content exceeds 280 characters for X' }) }] };
-            if (!account.access_token) return { content: [{ type: 'text', text: JSON.stringify({ error: 'Account not connected. Please reconnect.' }) }] };
 
             try {
+              // Get valid token (refresh if needed)
+              const accessToken = await getValidToken(account);
+              
               const response = await fetch('https://api.x.com/2/tweets', {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${account.access_token}`, 'Content-Type': 'application/json' },
+                headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: content }),
               });
               const data = await response.json();
@@ -250,7 +327,7 @@ function createMCPServer(authContext) {
               errorMessage = String(e);
             }
           } else {
-            return { content: [{ type: 'text', text: JSON.stringify({ error: `Platform '${account.platform}' not supported` }) }] };
+            return { content: [{ type: 'text', text: JSON.stringify({ error: 'Platform ' + account.platform + ' not supported' }) }] };
           }
 
           const { data: post, error } = await adminClient.from('posts').insert({ account_id, org_id: orgId, user_id: userId, content, status, platform_post_id: platformPostId, posted_at: postedAt, error_message: errorMessage }).select('id, content, status, posted_at, created_at, account:social_accounts(id, platform, username)').single();
@@ -267,7 +344,7 @@ function createMCPServer(authContext) {
         }
 
         default:
-          return { content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'Unknown tool: ' + name }) }] };
       }
     } catch (error) {
       return { content: [{ type: 'text', text: JSON.stringify({ error: error.message }) }] };
@@ -329,6 +406,6 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Sosmed MCP Server running on port ${PORT}`);
-  console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
+  console.log('Sosmed MCP Server running on port ' + PORT);
+  console.log('SSE endpoint: http://localhost:' + PORT + '/sse');
 });
