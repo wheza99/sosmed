@@ -36,9 +36,14 @@ export async function GET() {
     state: state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
+    // Force consent screen - allows switching accounts
+    // Note: Twitter/X may or may not respect this parameter
+    prompt: 'consent',
   })
 
   const authUrl = `https://twitter.com/i/oauth2/authorize?${params.toString()}`
+
+  console.log('OAuth - Auth URL:', authUrl)
 
   const response = NextResponse.redirect(authUrl)
   
