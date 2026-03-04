@@ -203,7 +203,7 @@ const TOOLS = [
   },
   {
     name: 'search_recent_posts',
-    description: 'Search recent posts on X (Twitter) for research, competitor analysis, and trend discovery. Returns posts from the last 7 days. Uses connected X account token for authentication.',
+    description: 'Search recent posts on X (Twitter) for research, competitor analysis, and trend discovery. Returns posts from the last 7 days. Results are cached for 1 hour to reduce API calls. Uses connected X account token for authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -247,6 +247,10 @@ const TOOLS = [
         user_fields: {
           type: 'string',
           description: 'User fields to include with expansions (e.g., "username,name,verified,public_metrics")'
+        },
+        use_cache: {
+          type: 'boolean',
+          description: 'Use cached results if available (default: true). Set to false to force fresh API call.'
         }
       },
       required: ['query'],
@@ -405,11 +409,52 @@ function createMCPServer(authContext) {
             next_token,
             tweet_fields = 'created_at,public_metrics,author_id',
             expansions,
-            user_fields
+            user_fields,
+            use_cache = true // Enable caching by default
           } = args;
 
           if (!query) {
             return { content: [{ type: 'text', text: JSON.stringify({ error: 'Query is required' }) }] };
+          }
+
+          // Generate query hash for caching
+          const queryHash = crypto
+            .createHash('sha256')
+            .update(`${query}|${max_results}|${sort_order}|${start_time || ''}|${end_time || ''}`)
+            .digest('hex');
+
+          // Check cache first if enabled
+          if (use_cache) {
+            const { data: cachedSearch, error: cacheError } = await adminClient
+              .from('search_history')
+              .select('*')
+              .eq('org_id', orgId)
+              .eq('query_hash', queryHash)
+              .gt('expires_at', new Date().toISOString())
+              .order('cached_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (cachedSearch && !cacheError) {
+              console.log('[Search] Cache HIT for query:', query);
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    success: true,
+                    cached: true,
+                    cached_at: cachedSearch.cached_at,
+                    query: cachedSearch.query,
+                    account_used: cachedSearch.account_used,
+                    total_results: cachedSearch.total_results,
+                    posts: cachedSearch.posts,
+                    users: cachedSearch.users,
+                    meta: cachedSearch.meta
+                  }, null, 2)
+                }]
+              };
+            }
+            console.log('[Search] Cache MISS for query:', query);
           }
 
           // Get X account - either specified or first available
@@ -524,6 +569,7 @@ function createMCPServer(authContext) {
             // Format successful response
             const result = {
               success: true,
+              cached: false,
               query: query,
               account_used: account.username,
               total_results: data.meta?.result_count || 0,
@@ -536,6 +582,30 @@ function createMCPServer(authContext) {
                 next_token: data.meta?.next_token
               }
             };
+
+            // Save to cache (async, don't wait)
+            if (use_cache) {
+              adminClient
+                .from('search_history')
+                .insert({
+                  org_id: orgId,
+                  user_id: userId,
+                  account_id: account.id,
+                  query: query,
+                  query_hash: queryHash,
+                  max_results: max_results,
+                  sort_order: sort_order,
+                  start_time: start_time,
+                  end_time: end_time,
+                  total_results: result.total_results,
+                  posts: result.posts,
+                  users: result.users,
+                  meta: result.meta,
+                  account_used: account.username
+                })
+                .then(() => console.log('[Search] Saved to cache'))
+                .catch(err => console.error('[Search] Failed to save cache:', err));
+            }
 
             return {
               content: [{
