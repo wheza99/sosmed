@@ -117,7 +117,7 @@ export default function DocsPage() {
               { name: "get_post", desc: "Get post with metrics", params: "post_id" },
               { name: "create_post", desc: "Create and publish post", params: "account_id, content" },
               { name: "delete_post", desc: "Delete post", params: "post_id" },
-              { name: "search_recent_posts", desc: "Search recent posts on X (last 7 days) for research, competitor analysis, and trend discovery", params: "query, account_id?, start_time?, end_time?, max_results?, sort_order?, tweet_fields?, expansions?, user_fields?" },
+              { name: "search_recent_posts", desc: "Search recent posts on X (last 7 days) for research, competitor analysis, and trend discovery. Uses connected X account token.", params: "query, account_id?, start_time?, end_time?, max_results?, sort_order?, tweet_fields?, expansions?, user_fields?" },
             ].map((tool) => (
               <div key={tool.name} className="p-3 border rounded-lg">
                 <div className="flex items-center justify-between mb-1">
@@ -152,19 +152,19 @@ export default function DocsPage() {
             <CodeBlock code={`mcporter call sosmed.get_post post_id="uuid"`} id="ex-metrics" language="bash" />
           </div>
           <div className="border-t pt-4 mt-4">
-            <label className="text-sm font-medium mb-2 block">Search recent posts - Basic</label>
+            <label className="text-sm font-medium mb-2 block">Search recent posts - Basic (uses first X account)</label>
             <CodeBlock code={`mcporter call sosmed.search_recent_posts query="MCP OR AI agents" max_results:10`} id="ex-search1" language="bash" />
           </div>
           <div>
+            <label className="text-sm font-medium mb-2 block">Search with specific account</label>
+            <CodeBlock code={`mcporter call sosmed.search_recent_posts query="from:username AI" account_id="your-x-account-uuid" max_results:50`} id="ex-search2" language="bash" />
+          </div>
+          <div>
             <label className="text-sm font-medium mb-2 block">Search with filters</label>
-            <CodeBlock code={`mcporter call sosmed.search_recent_posts query="MCP -is:retweet has:links" max_results:50 sort_order:"relevancy" tweet_fields:"created_at,public_metrics,author_id"`} id="ex-search2" language="bash" />
+            <CodeBlock code={`mcporter call sosmed.search_recent_posts query="MCP -is:retweet has:links" max_results:50 sort_order:"relevancy" tweet_fields:"created_at,public_metrics,author_id"`} id="ex-search3" language="bash" />
           </div>
           <div>
-            <label className="text-sm font-medium mb-2 block">Competitor analysis</label>
-            <CodeBlock code={`mcporter call sosmed.search_recent_posts query="from:username AI" account_id="your-x-account-uuid" max_results:100`} id="ex-search3" language="bash" />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-2 block">With user expansion</label>
+            <label className="text-sm font-medium mb-2 block">With user expansion (influencer discovery)</label>
             <CodeBlock code={`mcporter call sosmed.search_recent_posts query="MCP AI is:verified" expansions:"author_id" user_fields:"username,name,verified,public_metrics" max_results:20`} id="ex-search4" language="bash" />
           </div>
         </CardContent>

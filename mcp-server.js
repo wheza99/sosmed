@@ -203,7 +203,7 @@ const TOOLS = [
   },
   {
     name: 'search_recent_posts',
-    description: 'Search recent posts on X (Twitter) for research, competitor analysis, and trend discovery. Returns posts from the last 7 days.',
+    description: 'Search recent posts on X (Twitter) for research, competitor analysis, and trend discovery. Returns posts from the last 7 days. Uses connected X account token for authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -213,7 +213,7 @@ const TOOLS = [
         },
         account_id: {
           type: 'string',
-          description: 'Account UUID to use for search (must be X account). Optional if X_BEARER_TOKEN env var is set.'
+          description: 'Account UUID to use for search. If not provided, will use the first available X account in workspace.'
         },
         start_time: {
           type: 'string',
@@ -412,30 +412,70 @@ function createMCPServer(authContext) {
             return { content: [{ type: 'text', text: JSON.stringify({ error: 'Query is required' }) }] };
           }
 
-          // Get bearer token - either from environment or from user's account
-          let bearerToken = process.env.X_BEARER_TOKEN;
-          
-          if (!bearerToken && account_id) {
-            // Use user's OAuth token
-            const { data: account, error: accountError } = await adminClient
+          // Get X account - either specified or first available
+          let account;
+          if (account_id) {
+            const { data, error } = await adminClient
               .from('social_accounts')
-              .select('id, platform, access_token, refresh_token, token_expires_at')
+              .select('id, platform, access_token, refresh_token, token_expires_at, username')
               .eq('id', account_id)
               .eq('org_id', orgId)
               .eq('platform', 'x')
+              .eq('is_active', true)
               .single();
             
-            if (accountError || !account) {
-              return { content: [{ type: 'text', text: JSON.stringify({ error: 'X account not found. Provide account_id for a connected X account.' }) }] };
+            if (error || !data) {
+              return { 
+                content: [{ 
+                  type: 'text', 
+                  text: JSON.stringify({ error: 'X account not found or inactive' }) 
+                }] 
+              };
             }
+            account = data;
+          } else {
+            // Get first available X account
+            const { data, error } = await adminClient
+              .from('social_accounts')
+              .select('id, platform, access_token, refresh_token, token_expires_at, username')
+              .eq('org_id', orgId)
+              .eq('platform', 'x')
+              .eq('is_active', true)
+              .limit(1)
+              .single();
             
-            // Get valid token (refresh if needed)
-            bearerToken = await getValidToken(account);
-          } else if (!bearerToken) {
-            return { content: [{ type: 'text', text: JSON.stringify({ error: 'No bearer token available. Set X_BEARER_TOKEN env var or provide account_id for a connected X account.' }) }] };
+            if (error || !data) {
+              return { 
+                content: [{ 
+                  type: 'text', 
+                  text: JSON.stringify({ 
+                    error: 'No connected X account found. Please connect an X account first.' 
+                  }) 
+                }] 
+              };
+            }
+            account = data;
           }
 
-          // Build API URL
+          // Get valid access token (refresh if needed)
+          let accessToken;
+          try {
+            accessToken = await getValidToken(account);
+          } catch (tokenError) {
+            console.error('[Search] Token error:', tokenError);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  error: 'Failed to get valid access token',
+                  message: tokenError.message,
+                  hint: 'Please reconnect your X account'
+                })
+              }]
+            };
+          }
+
+          // Build API URL with parameters
           const params = new URLSearchParams();
           params.append('query', query);
           params.append('max_results', Math.min(Math.max(max_results, 10), 100).toString());
@@ -448,10 +488,16 @@ function createMCPServer(authContext) {
           if (expansions) params.append('expansions', expansions);
           if (user_fields) params.append('user.fields', user_fields);
 
+          const url = `https://api.x.com/2/tweets/search/recent?${params.toString()}`;
+
+          console.log('[Search] Query:', query);
+          console.log('[Search] Account:', account.username);
+          console.log('[Search] URL:', url);
+
           try {
-            const response = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+            const response = await fetch(url, {
               headers: {
-                'Authorization': `Bearer ${bearerToken}`,
+                'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json'
               }
             });
@@ -459,26 +505,36 @@ function createMCPServer(authContext) {
             const data = await response.json();
 
             if (!response.ok) {
+              console.error('[Search] X API error:', response.status, data);
               return {
                 content: [{
                   type: 'text',
                   text: JSON.stringify({
                     error: 'X API error',
                     status: response.status,
-                    details: data.errors || data
+                    details: data.errors || data,
+                    hint: data.title === 'Unauthorized' 
+                      ? 'Token may be expired or invalid. Try reconnecting your X account.'
+                      : undefined
                   }, null, 2)
                 }]
               };
             }
 
-            // Format response
+            // Format successful response
             const result = {
               success: true,
               query: query,
+              account_used: account.username,
               total_results: data.meta?.result_count || 0,
               posts: data.data || [],
               users: data.includes?.users || [],
-              meta: data.meta || {}
+              meta: {
+                newest_id: data.meta?.newest_id,
+                oldest_id: data.meta?.oldest_id,
+                result_count: data.meta?.result_count || 0,
+                next_token: data.meta?.next_token
+              }
             };
 
             return {
@@ -487,13 +543,14 @@ function createMCPServer(authContext) {
                 text: JSON.stringify(result, null, 2)
               }]
             };
-          } catch (error) {
+          } catch (fetchError) {
+            console.error('[Search] Fetch error:', fetchError);
             return {
               content: [{
                 type: 'text',
                 text: JSON.stringify({
-                  error: 'Failed to search posts',
-                  message: error.message
+                  error: 'Failed to connect to X API',
+                  message: fetchError.message
                 }, null, 2)
               }]
             };
