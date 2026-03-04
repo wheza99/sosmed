@@ -201,6 +201,57 @@ const TOOLS = [
       required: ['post_id'],
     },
   },
+  {
+    name: 'search_recent_posts',
+    description: 'Search recent posts on X (Twitter) for research, competitor analysis, and trend discovery. Returns posts from the last 7 days.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query with operators. Examples: "MCP OR AI agents", "from:username", "#hashtag", "keyword -is:retweet has:links"'
+        },
+        account_id: {
+          type: 'string',
+          description: 'Account UUID to use for search (must be X account). Optional if X_BEARER_TOKEN env var is set.'
+        },
+        start_time: {
+          type: 'string',
+          description: 'ISO 8601 timestamp for oldest post (e.g., "2026-03-01T00:00:00Z")'
+        },
+        end_time: {
+          type: 'string',
+          description: 'ISO 8601 timestamp for newest post (e.g., "2026-03-03T00:00:00Z")'
+        },
+        max_results: {
+          type: 'number',
+          description: 'Number of results (10-100, default: 10)'
+        },
+        sort_order: {
+          type: 'string',
+          enum: ['recency', 'relevancy'],
+          description: 'Sort by recency or relevancy (default: recency)'
+        },
+        next_token: {
+          type: 'string',
+          description: 'Pagination token from previous response'
+        },
+        tweet_fields: {
+          type: 'string',
+          description: 'Comma-separated fields to include (default: created_at,public_metrics,author_id)'
+        },
+        expansions: {
+          type: 'string',
+          description: 'Expansions to include (e.g., "author_id" to get user info)'
+        },
+        user_fields: {
+          type: 'string',
+          description: 'User fields to include with expansions (e.g., "username,name,verified,public_metrics")'
+        }
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 function formatPost(post) {
@@ -341,6 +392,112 @@ function createMCPServer(authContext) {
           const { error } = await adminClient.from('posts').delete().eq('id', post_id).eq('org_id', orgId);
           if (error) throw error;
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Post deleted' }, null, 2) }] };
+        }
+
+        case 'search_recent_posts': {
+          const {
+            query,
+            account_id,
+            start_time,
+            end_time,
+            max_results = 10,
+            sort_order = 'recency',
+            next_token,
+            tweet_fields = 'created_at,public_metrics,author_id',
+            expansions,
+            user_fields
+          } = args;
+
+          if (!query) {
+            return { content: [{ type: 'text', text: JSON.stringify({ error: 'Query is required' }) }] };
+          }
+
+          // Get bearer token - either from environment or from user's account
+          let bearerToken = process.env.X_BEARER_TOKEN;
+          
+          if (!bearerToken && account_id) {
+            // Use user's OAuth token
+            const { data: account, error: accountError } = await adminClient
+              .from('social_accounts')
+              .select('id, platform, access_token, refresh_token, token_expires_at')
+              .eq('id', account_id)
+              .eq('org_id', orgId)
+              .eq('platform', 'x')
+              .single();
+            
+            if (accountError || !account) {
+              return { content: [{ type: 'text', text: JSON.stringify({ error: 'X account not found. Provide account_id for a connected X account.' }) }] };
+            }
+            
+            // Get valid token (refresh if needed)
+            bearerToken = await getValidToken(account);
+          } else if (!bearerToken) {
+            return { content: [{ type: 'text', text: JSON.stringify({ error: 'No bearer token available. Set X_BEARER_TOKEN env var or provide account_id for a connected X account.' }) }] };
+          }
+
+          // Build API URL
+          const params = new URLSearchParams();
+          params.append('query', query);
+          params.append('max_results', Math.min(Math.max(max_results, 10), 100).toString());
+          params.append('tweet.fields', tweet_fields);
+          
+          if (start_time) params.append('start_time', start_time);
+          if (end_time) params.append('end_time', end_time);
+          if (sort_order) params.append('sort_order', sort_order);
+          if (next_token) params.append('next_token', next_token);
+          if (expansions) params.append('expansions', expansions);
+          if (user_fields) params.append('user.fields', user_fields);
+
+          try {
+            const response = await fetch(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+              headers: {
+                'Authorization': `Bearer ${bearerToken}`,
+                'Content-Type': 'application/json'
+              }
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'X API error',
+                    status: response.status,
+                    details: data.errors || data
+                  }, null, 2)
+                }]
+              };
+            }
+
+            // Format response
+            const result = {
+              success: true,
+              query: query,
+              total_results: data.meta?.result_count || 0,
+              posts: data.data || [],
+              users: data.includes?.users || [],
+              meta: data.meta || {}
+            };
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }]
+            };
+          } catch (error) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  error: 'Failed to search posts',
+                  message: error.message
+                }, null, 2)
+              }]
+            };
+          }
         }
 
         default:
