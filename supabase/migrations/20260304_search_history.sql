@@ -1,4 +1,4 @@
--- Create search_history table for caching X API search results
+-- Create search_history table for tracking agent search activity
 CREATE TABLE IF NOT EXISTS search_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -7,13 +7,12 @@ CREATE TABLE IF NOT EXISTS search_history (
   
   -- Search parameters
   query TEXT NOT NULL,
-  query_hash TEXT NOT NULL, -- SHA256 of query + params for deduplication
   max_results INTEGER DEFAULT 10,
   sort_order TEXT DEFAULT 'recency',
   start_time TIMESTAMPTZ,
   end_time TIMESTAMPTZ,
   
-  -- Search results
+  -- Search results (for audit trail)
   total_results INTEGER DEFAULT 0,
   posts JSONB DEFAULT '[]'::jsonb,
   users JSONB DEFAULT '[]'::jsonb,
@@ -21,60 +20,76 @@ CREATE TABLE IF NOT EXISTS search_history (
   
   -- Metadata
   account_used TEXT,
-  cached_at TIMESTAMPTZ DEFAULT NOW(),
-  expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '1 hour'), -- Cache for 1 hour
   
   created_at TIMESTAMPTZ DEFAULT NOW(),
   
-  -- Indexes
+  -- Constraints
   CONSTRAINT valid_sort_order CHECK (sort_order IN ('recency', 'relevancy'))
 );
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_search_history_org ON search_history(org_id);
 CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id);
-CREATE INDEX IF NOT EXISTS idx_search_history_query_hash ON search_history(query_hash);
-CREATE INDEX IF NOT EXISTS idx_search_history_cached ON search_history(cached_at DESC);
-CREATE INDEX IF NOT EXISTS idx_search_history_expires ON search_history(expires_at) WHERE expires_at > NOW();
-
--- Function to generate query hash
-CREATE OR REPLACE FUNCTION generate_search_hash(
-  p_query TEXT,
-  p_max_results INTEGER,
-  p_sort_order TEXT,
-  p_start_time TIMESTAMPTZ,
-  p_end_time TIMESTAMPTZ
-) RETURNS TEXT AS $$
-BEGIN
-  RETURN encode(
-    sha256(
-      (p_query || '|' || p_max_results::text || '|' || p_sort_order || '|' || 
-       COALESCE(p_start_time::text, '') || '|' || COALESCE(p_end_time::text, ''))::bytea
-    ),
-    'hex'
-  );
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+CREATE INDEX IF NOT EXISTS idx_search_history_created ON search_history(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_search_history_account ON search_history(account_id);
 
 -- RLS Policies
 ALTER TABLE search_history ENABLE ROW LEVEL SECURITY;
 
--- Users can view their own search history
-CREATE POLICY "Users can view own search history"
+-- Users can view their org's search history
+CREATE POLICY "Users can view org search history"
   ON search_history FOR SELECT
-  USING (auth.uid() = user_id);
+  USING (org_id IN (
+    SELECT org_id FROM api_keys 
+    WHERE user_id = auth.uid() AND is_active = true
+  ));
 
 -- Users can create search history
 CREATE POLICY "Users can create search history"
   ON search_history FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
--- Users can delete own search history
-CREATE POLICY "Users can delete own search history"
-  ON search_history FOR DELETE
-  USING (auth.uid() = user_id);
-
 -- Comment
-COMMENT ON TABLE search_history IS 'Cache X API search results to reduce API calls and enable historical analysis';
-COMMENT ON COLUMN search_history.query_hash IS 'SHA256 hash of query parameters for deduplication';
-COMMENT ON COLUMN search_history.expires_at IS 'Cache expiration time (1 hour default)';
+COMMENT ON TABLE search_history IS 'Audit trail of agent search activity - allows users to see what searches their agents performed';
+COMMENT ON COLUMN search_history.posts IS 'Snapshot of search results at the time of query';
+COMMENT ON COLUMN search_history.users IS 'User profiles included in search results';
+
+-- Add post_metrics table to track engagement over time
+CREATE TABLE IF NOT EXISTS post_metrics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  
+  -- Metrics from platform
+  retweet_count INTEGER DEFAULT 0,
+  reply_count INTEGER DEFAULT 0,
+  like_count INTEGER DEFAULT 0,
+  quote_count INTEGER DEFAULT 0,
+  bookmark_count INTEGER DEFAULT 0,
+  impression_count INTEGER DEFAULT 0,
+  
+  -- Metadata
+  fetched_at TIMESTAMPTZ DEFAULT NOW(),
+  
+  -- Unique constraint to prevent duplicates
+  CONSTRAINT unique_post_metric_time UNIQUE (post_id, fetched_at)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_post_metrics_post ON post_metrics(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_metrics_fetched ON post_metrics(fetched_at DESC);
+
+-- RLS
+ALTER TABLE post_metrics ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view org post metrics"
+  ON post_metrics FOR SELECT
+  USING (post_id IN (
+    SELECT p.id FROM posts p
+    JOIN social_accounts sa ON p.account_id = sa.id
+    WHERE sa.org_id IN (
+      SELECT org_id FROM api_keys 
+      WHERE user_id = auth.uid() AND is_active = true
+    )
+  ));
+
+COMMENT ON TABLE post_metrics IS 'Historical engagement metrics for posts - track performance over time';

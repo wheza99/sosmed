@@ -117,7 +117,7 @@ export default function DocsPage() {
               { name: "get_post", desc: "Get post with metrics", params: "post_id" },
               { name: "create_post", desc: "Create and publish post", params: "account_id, content" },
               { name: "delete_post", desc: "Delete post", params: "post_id" },
-              { name: "search_recent_posts", desc: "Search recent posts on X (last 7 days) for research, competitor analysis, and trend discovery. Results cached for 1 hour. Uses connected X account token.", params: "query, account_id?, start_time?, end_time?, max_results?, sort_order?, tweet_fields?, expansions?, user_fields?, use_cache?" },
+              { name: "search_recent_posts", desc: "Search recent posts on X (last 7 days) for research, competitor analysis, and trend discovery. All searches saved to history for transparency. Metrics tracked over time.", params: "query, account_id?, start_time?, end_time?, max_results?, sort_order?, tweet_fields?, expansions?, user_fields?" },
             ].map((tool) => (
               <div key={tool.name} className="p-3 border rounded-lg">
                 <div className="flex items-center justify-between mb-1">
